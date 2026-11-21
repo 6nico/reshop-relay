@@ -4,6 +4,7 @@ const PY_FILES = ["__init__.py", "store.py", "sim.py", "metrics.py", "web.py"];
 const SCENARIOS = { low: "Low volume", medium: "Medium volume", high: "High volume" };
 const S = ["dedicated", "opportunistic", "hybrid"];
 const LABEL = { dedicated: "Dedicated trips", opportunistic: "During existing trips", hybrid: "Hybrid" };
+const SHORT = { dedicated: "Dedicated", opportunistic: "During trips", hybrid: "Hybrid" };
 const COLOR = { dedicated: "var(--c-ded)", opportunistic: "var(--c-opp)", hybrid: "var(--c-hyb)" };
 const SWEEP = {
   arrival_volume_multiplier: { label: "Reshop volume", vals: [0.5, 0.75, 1, 1.25, 1.5, 1.75] },
@@ -47,7 +48,7 @@ async function boot() {
     py.FS.mkdir("/rr"); py.FS.mkdir("/rr/reshop_relay");
     for (const f of PY_FILES) py.FS.writeFile(`/rr/reshop_relay/${f}`, await (await fetch(`reshop_relay/${f}`)).text());
     py.runPython("import sys; sys.path.insert(0, '/rr'); from reshop_relay import web");
-    setEngine("Python engine ready", true);
+    setEngine("Live model", true);
     $("#run").disabled = false;
     run();
   } catch (err) {
@@ -63,9 +64,25 @@ function loadScenario(k) {
   renderAssumptions();
 }
 
+const QUICK = {
+  arrival_volume_multiplier: { label: "Reshop volume", min: 0.25, max: 2, step: 0.05, fmt: (v) => `${v}×` },
+  cart_capacity: { label: "Items per cart", min: 4, max: 20, step: 1, fmt: (v) => `${v}` },
+  max_detour_m_per_item: { label: "Max extra walk per item", min: 5, max: 60, step: 5, fmt: (v) => `${v} m` },
+};
 function renderAssumptions() {
+  $("#quick").innerHTML = Object.entries(QUICK).filter(([k]) => cfg.assumptions[k]).map(([k, q]) => `
+    <div class="slider">
+      <div class="lbl"><span>${q.label}</span><b data-out="${k}">${q.fmt(val(k))}</b></div>
+      <input type="range" min="${q.min}" max="${q.max}" step="${q.step}" value="${val(k)}" data-q="${k}">
+    </div>`).join("");
+  $("#quick").querySelectorAll("input").forEach((inp) => inp.addEventListener("input", () => {
+    const k = inp.dataset.q, v = parseFloat(inp.value);
+    cfg.assumptions[k].value = v;
+    $(`[data-out="${k}"]`).textContent = QUICK[k].fmt(v);
+    const adv = $(`#assumptions input[data-k="${k}"]`); if (adv) adv.value = v;
+  }));
   const box = $("#assumptions");
-  box.innerHTML = Object.entries(cfg.assumptions).map(([k, a]) => `
+  box.innerHTML = Object.entries(cfg.assumptions).filter(([k]) => !QUICK[k]).map(([k, a]) => `
     <div class="assump">
       <div class="lbl"><span>${a.label}</span><span class="src ${a.source}">${a.source}</span></div>
       <input type="number" step="any" data-k="${k}" value="${a.value}">
@@ -78,7 +95,17 @@ function renderAssumptions() {
 }
 
 function wire() {
+  document.querySelectorAll("#tabs button").forEach((b) => b.onclick = () => {
+    document.querySelectorAll("#tabs button").forEach((x) => x.classList.toggle("on", x === b));
+    $("#view-results").hidden = b.dataset.tab !== "results";
+    $("#view-track").hidden = b.dataset.tab !== "track";
+    if (b.dataset.tab === "results" && last) render();
+  });
   $("#scenario").onchange = (e) => { loadScenario(e.target.value); run(); };
+  document.querySelectorAll("#busy button").forEach((b) => b.onclick = () => {
+    document.querySelectorAll("#busy button").forEach((x) => x.classList.toggle("on", x === b));
+    $("#scenario").value = b.dataset.s; loadScenario(b.dataset.s); run();
+  });
   $("#reset").onclick = () => { loadScenario($("#scenario").value); run(); };
   $("#run").onclick = () => run();
   $("#mapStrategy").onchange = $("#mapWorker").onchange = () => drawMap();
@@ -108,12 +135,12 @@ async function run() {
     alertBox(msg.replace(/^.*Error: /, "Can't run this setup: ") + (cfg.store.blocked && cfg.store.blocked.length ? " Click the red segment on the map again to reopen it." : ""));
     if (last) drawMap();
   } finally {
-    busy = false; $("#run").disabled = false; $("#run").textContent = "Run all 3 strategies";
+    busy = false; $("#run").disabled = false; $("#run").textContent = "Run simulation";
   }
 }
 
 function render() {
-  drawVerdict(); drawKpis(); drawBacklog(); drawBars();
+  drawVerdict(); drawKpis(); drawBacklog();
   const ws = cfg.workers.map((w) => `<option value="${w.id}">${w.name}</option>`).join("");
   const cur = $("#mapWorker").value;
   $("#mapWorker").innerHTML = `<option value="all">All team members</option>` + ws;
@@ -122,56 +149,57 @@ function render() {
 }
 
 // ---------------------------------------------------------------- verdict + table
-const GUARD = { errors_not_higher: "errors", task_deadlines_kept: "task deadlines", closing_backlog_not_higher: "backlog at close", oldest_item_not_older: "oldest item" };
+const GUARD = { errors_not_higher: "errors", task_deadlines_kept: "task deadlines", closing_backlog_not_higher: "pile at close", oldest_item_not_older: "oldest item" };
+const passes = (s) => Object.values(last.comparison[s].guardrails).every(Boolean);
+const fails = (s) => Object.entries(last.comparison[s].guardrails).filter(([, ok]) => !ok).map(([k]) => GUARD[k]);
+function pick() {
+  const C = last.comparison;
+  const ok = ["hybrid", "opportunistic"].filter((s) => passes(s) && C[s].reduction_vs_dedicated > 0).sort((a, b) => C[b].reduction_vs_dedicated - C[a].reduction_vs_dedicated);
+  return ok[0] || null;
+}
 function drawVerdict() {
-  const R = last.results, C = last.comparison, target = (cfg.target_reduction || 0.2);
-  const cands = ["opportunistic", "hybrid"].filter((s) => C[s].guardrails && Object.values(C[s].guardrails).every(Boolean) && C[s].reduction_vs_dedicated > 0);
-  cands.sort((a, b) => C[b].reduction_vs_dedicated - C[a].reduction_vs_dedicated);
+  const R = last.results, C = last.comparison, B = last.business;
+  const win = pick(), s = win || "hybrid", d = R.dedicated, r = R[s];
   let head, body;
-  if (cands.length) {
-    const b = cands[0], red = C[b].reduction_vs_dedicated;
-    head = `${LABEL[b]} uses ${pct(red)} less labor per item than dedicated trips`;
-    body = red >= target
-      ? `That beats the ${Math.round(target * 100)}% target while passing every guardrail, in this one run. Check the sensitivity chart before trusting it.`
-      : `It passes every guardrail, but it is below the ${Math.round(target * 100)}% target. A real gain, but not the size the project is aiming for under these assumptions.`;
+  if (win) {
+    head = `Switch to ${LABEL[win].toLowerCase()}: ${pct(C[win].reduction_vs_dedicated)} less labor per item`;
+    body = `It returns items with less walking and passes every service check: no extra errors, no late tasks, no bigger pile at close.`;
   } else {
-    head = "Dedicated trips are still the safest choice here";
-    const o = C.opportunistic, h = C.hybrid;
-    const fails = (s) => Object.entries(C[s].guardrails).filter(([, ok]) => !ok).map(([k]) => GUARD[k]).join(", ");
-    body = `Collecting during existing trips saves ${pct(o.reduction_vs_dedicated)} labor per item but fails on: ${fails("opportunistic") || "efficiency"}. Hybrid: ${pct(h.reduction_vs_dedicated)}${fails("hybrid") ? `, fails on: ${fails("hybrid")}` : ""}.`;
+    const more = r.closing_backlog - d.closing_backlog;
+    head = `Keep dedicated trips for now`;
+    body = `Hybrid saves ${pct(C.hybrid.reduction_vs_dedicated)} labor per item, but ${more > 0 ? `leaves ${fmt(more, 0)} more items unshelved at close` : `misses on ${fails("hybrid").join(", ")}`}. Grabbing reshop only during other trips saves more labor, but ${fmt(R.opportunistic.closing_backlog - d.closing_backlog, 0)} more items are left at close.`;
   }
-  const chips = ["opportunistic", "hybrid"].map((s) => Object.entries(C[s].guardrails).map(([k, ok]) =>
-    `<span class="chip ${ok ? "ok" : "no"}">${s === "hybrid" ? "Hybrid" : "During trips"} · ${GUARD[k]} ${ok ? "✓" : "✗"}</span>`).join("")).join("");
-  $("#verdict").innerHTML = `<h1>${head}</h1><p class="big">${body} Run: ${R.dedicated.items_arrived} reshop items, seed ${cfg.seed}.</p><div class="chips">${chips}</div>`;
+  const tile = (big, small, cls = "") => `<div class="tile"><b class="${cls}">${big}</b><span>${small}</span></div>`;
+  $("#verdict").innerHTML = `<p class="eyebrow">${win ? "Recommendation" : "Finding"}</p><h1>${head}</h1><p class="big">${body}</p>
+    <div class="tiles">
+      ${tile(pct(C[s].reduction_vs_dedicated), `less labor per item (${SHORT[s]})`, C[s].reduction_vs_dedicated > 0 ? "pos" : "neg")}
+      ${tile(`${fmt(r.items_correct, 0)} <small>vs ${fmt(d.items_correct, 0)}</small>`, `items back on shelf`)}
+      ${tile(`${fmt(r.closing_backlog, 0)} <small>vs ${fmt(d.closing_backlog, 0)}</small>`, `items left at close`, r.closing_backlog > d.closing_backlog ? "neg" : "pos")}
+      ${tile(`${fmt(B[s].daily_hours_released, 1)} hrs`, `freed per day`)}
+    </div>`;
+  $("#runmeta").textContent = `${d.items_arrived} reshop items · 8-hour shift · 4 team members`;
 }
 
 function drawKpis() {
   const R = last.results, C = last.comparison;
   const rows = [
-    ["Items returned correctly", (r) => r.items_correct, 0],
-    ["Left at close", (r) => r.closing_backlog, 0],
-    ["Reshop labor (min)", (r) => r.reshop_labor_min, 1],
-    ["Labor min per correct item", (r) => r.labor_min_per_correct_item, 3],
-    ["vs dedicated", (r, s) => s === "dedicated" ? null : C[s].reduction_vs_dedicated, "pct"],
-    ["Dedicated trips", (r) => r.dedicated_trips, 0],
-    ["Pickups during other work", (r) => r.collections_during_tasks, 0],
-    ["Avg wait before shelf (min)", (r) => r.avg_wait_min, 1],
-    ["Oldest item age (min)", (r) => r.max_age_min, 1],
-    ["Walking for reshop (m)", (r) => r.reshop_walk_m, 0],
-    ["Placement errors", (r) => r.placement_errors, 0],
-    ["Late tasks / delay (min)", (r) => `${r.tasks_late} / ${fmt(r.task_delay_min, 1)}`, "raw"],
-    ["Tasks not started", (r) => r.tasks_not_started, 0],
+    ["Items back on shelf", (r) => fmt(r.items_correct, 0)],
+    ["Items left at close", (r, s) => cmp(r.closing_backlog, R.dedicated.closing_backlog, s, 0)],
+    ["Labor minutes per item", (r) => fmt(r.labor_min_per_correct_item, 2)],
+    ["Labor saved vs today", (r, s) => s === "dedicated" ? `<span class="faint">baseline</span>` : `<span class="${C[s].reduction_vs_dedicated > 0 ? "pos" : "neg"}">${pct(C[s].reduction_vs_dedicated)}</span>`],
+    ["Average wait before shelf", (r, s) => cmp(r.avg_wait_min, R.dedicated.avg_wait_min, s, 0, " min")],
+    ["Placement errors", (r, s) => cmp(r.placement_errors, R.dedicated.placement_errors, s, 0)],
+    ["Late tasks", (r, s) => cmp(r.tasks_late, R.dedicated.tasks_late, s, 0)],
+    ["Passes all service checks", (r, s) => s === "dedicated" ? `<span class="faint">baseline</span>` : passes(s) ? `<span class="pos">Yes</span>` : `<span class="neg" title="Misses: ${fails(s).join(", ")}">No</span>`],
   ];
   let h = `<tr><th></th>${S.map((s) => `<th class="num"><i class="sw" style="background:${COLOR[s]}"></i>${LABEL[s]}</th>`).join("")}</tr>`;
-  for (const [name, f, d] of rows) {
-    h += `<tr><td>${name}</td>${S.map((s) => {
-      const v = f(R[s], s);
-      if (d === "pct") return `<td class="num ${v > 0 ? "pos" : v < 0 ? "neg" : ""}">${v === null ? "baseline" : pct(v)}</td>`;
-      if (d === "raw") return `<td class="num">${v}</td>`;
-      return `<td class="num">${fmt(v, d)}</td>`;
-    }).join("")}</tr>`;
-  }
+  for (const [name, f] of rows) h += `<tr><td>${name}</td>${S.map((s) => `<td class="num">${f(R[s], s)}</td>`).join("")}</tr>`;
   $("#kpis").innerHTML = h;
+}
+function cmp(v, base, s, d, unit = "") {
+  const t = fmt(v, d) + unit;
+  if (s === "dedicated" || Math.abs(v - base) < 0.5) return t;
+  return `<span class="${v > base ? "neg" : "pos"}">${t}</span>`;
 }
 
 // ---------------------------------------------------------------- charts
@@ -273,20 +301,21 @@ function drawDecisions() {
 }
 
 function drawBusiness() {
-  const B = last.business;
-  const best = ["hybrid", "opportunistic"].map((s) => [s, B[s]]);
-  $("#business").innerHTML = best.map(([s, b]) => `
-    <p class="tag" style="margin:6px 0"><i class="sw" style="background:${COLOR[s]}"></i>${LABEL[s]} vs dedicated${Object.values(last.comparison[s].guardrails).every(Boolean) ? "" : ` <span class="warn">· fails a guardrail, so this number is not valid</span>`}</p>
-    <div class="biz"><div><b>${fmt(b.labor_min_saved_per_day, 0)}</b><span>labor min saved / day</span></div>
-    <div><b>${fmt(b.daily_hours_released, 2)}</b><span>hours released / day</span></div>
-    <div><b>$${fmt(b.annual_capacity_value, 0)}</b><span>labor capacity / year</span></div></div>`).join("") +
-    `<p class="hint">Uses ${val("operating_days")} days × $${val("hourly_labor_cost")}/hr. Change both in Assumptions.</p>`;
+  const B = last.business, win = pick(), s = win || "hybrid", b = B[s];
+  $("#business").innerHTML = `
+    <p class="hint" style="margin-bottom:12px">${LABEL[s]} compared with dedicated trips, one store.</p>
+    <div class="biz">
+      <div><b>${fmt(b.labor_min_saved_per_day, 0)}</b><span>labor minutes saved per day</span></div>
+      <div><b>${fmt(b.daily_hours_released, 1)}</b><span>hours freed per day</span></div>
+      <div><b>$${fmt(b.annual_capacity_value, 0)}</b><span>labor time per year</span></div>
+    </div>
+    <p class="hint">${win ? "" : `<span class="warn">Only counts once ${LABEL[s].toLowerCase()} passes every service check.</span> `}Freed hours go to other work; this is not a payroll cut. Uses ${val("operating_days")} days at $${val("hourly_labor_cost")}/hr.</p>`;
 }
 
 function drawChecks() {
   const names = { labor_matches_log: "Labor total matches event log", placed_matches_log: "Placed count matches event log", no_double_placement: "No item placed twice", every_placed_item_was_picked: "Every placed item was picked up first", items_conserved: "No item disappeared (placed + waiting = arrived)" };
   $("#checks").innerHTML = Object.keys(names).map((k) => `<div class="check"><span>${names[k]}</span><span>${S.map((s) => last.reconcile[s][k] ? `<span class="pos">✓</span>` : `<span class="neg">✗</span>`).join(" ")}</span></div>`).join("") +
-    `<p class="hint" style="margin-top:8px">One mark per strategy: dedicated, during trips, hybrid. Same settings and seed always give the same results.</p>`;
+    `<p class="hint" style="margin-top:8px">One mark each for dedicated, during trips, and hybrid. The same settings always give the same results.</p>`;
 }
 
 // ---------------------------------------------------------------- sensitivity

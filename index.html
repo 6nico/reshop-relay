@@ -13,33 +13,37 @@
 </head>
 <body>
 <header class="top">
-  <div class="brand"><b>Reshop Relay</b><span>Retail Reshop Routing &amp; Labor Efficiency</span></div>
+  <div class="brand"><b>Reshop Relay</b><span>Reshop labor study</span></div>
   <div class="toplinks">
     <span id="engine" class="engine"><i></i>Loading Python engine…</span>
-    <a href="https://github.com/6nico/reshop-relay" target="_blank" rel="noopener">Code</a>
-    <a href="https://6nico.github.io" target="_blank" rel="noopener">Nico</a>
+    <a href="https://6nico.github.io" target="_blank" rel="noopener">Nicolas Olmos</a>
   </div>
 </header>
 
 <div class="layout">
   <aside class="panel">
     <section>
-      <h3>Scenario</h3>
-      <select id="scenario"></select>
+      <h3>How busy is the store?</h3>
+      <div class="seg" id="busy">
+        <button data-s="low">Low</button><button data-s="medium" class="on">Medium</button><button data-s="high">High</button>
+      </div>
+      <select id="scenario" hidden></select>
       <p id="scenarioDesc" class="hint"></p>
-      <label class="row2">Random seed <input id="seed" type="number" value="7" min="1"></label>
     </section>
     <section>
-      <h3>Assumptions</h3>
-      <p class="hint">Badges show where a number comes from. <span class="src forum">forum</span> = reported by store workers online. <span class="src assumption">assumption</span> = a guess to test.</p>
-      <div id="assumptions"></div>
+      <h3>Main settings</h3>
+      <div id="quick"></div>
     </section>
     <section class="actions">
-      <button id="run" class="primary" disabled>Run all 3 strategies</button>
-      <button id="reset">Reset scenario</button>
+      <button id="run" class="primary" disabled>Run simulation</button>
     </section>
-    <section>
-      <h3>Export</h3>
+    <details class="adv">
+      <summary>Advanced settings</summary>
+      <label class="row2">Random seed <input id="seed" type="number" value="7" min="1"></label>
+      <p class="hint" style="margin-top:12px"><span class="src forum">forum</span> = reported by store workers online. <span class="src assumption">assumption</span> = a guess to test.</p>
+      <div id="assumptions"></div>
+      <button id="reset" style="width:100%;margin-top:10px">Reset to defaults</button>
+      <h3 style="margin-top:22px">Export</h3>
       <div class="btngrid">
         <button data-exp="results_json">Results JSON</button>
         <button data-exp="summary_csv">Summary CSV</button>
@@ -47,87 +51,141 @@
         <button data-exp="scenario">Scenario JSON</button>
       </div>
       <label class="file">Load a scenario JSON<input id="import" type="file" accept=".json,application/json"></label>
-    </section>
+    </details>
   </aside>
 
   <main class="main">
-    <section class="card verdict" id="verdict"><p class="hint">Running the simulation…</p></section>
+    <nav class="tabs" id="tabs"><button data-tab="results" class="on">Results</button><button data-tab="track">How to track this in a store</button></nav>
+    <div id="view-results" class="view">
+    <section class="intro">
+      <p class="eyebrow">The question</p>
+      <h1>Can stores return reshop with less labor?</h1>
+      <p>Reshop piles up at Guest Services all day. Today, a team member makes a separate trip to put it back. This study tests a simple idea: pick up reshop during trips team members already make, like breaks and backup cashier. The goal is to cut labor <b>without</b> hurting service.</p>
+    </section>
+    <section class="card hero" id="verdict"><p class="hint">Running the simulation…</p></section>
 
     <section class="card">
-      <div class="cardhead"><h2>Strategy comparison</h2><span class="hint">Same arrivals, staff, and tasks for all three.</span></div>
+      <div class="cardhead"><h2>Three ways to return reshop</h2><span class="hint" id="runmeta"></span></div>
+      <div class="defs">
+        <div><i class="sw" style="background:var(--c-ded)"></i><b>Dedicated trips</b><span>Today's way. A team member makes a separate trip from Guest Services.</span></div>
+        <div><i class="sw" style="background:var(--c-opp)"></i><b>During existing trips</b><span>Team members grab reshop while they are already walking for other work.</span></div>
+        <div><i class="sw" style="background:var(--c-hyb)"></i><b>Hybrid</b><span>Grab reshop during other work, but send a dedicated trip when it piles up.</span></div>
+      </div>
       <div class="tablewrap"><table id="kpis"></table></div>
     </section>
 
     <div class="two">
       <section class="card">
-        <div class="cardhead"><h2>Reshop waiting over the shift</h2></div>
+        <div class="cardhead"><h2>Reshop waiting at Guest Services</h2></div>
         <div id="backlogChart" class="chart"></div>
         <div class="legend" id="legend1"></div>
       </section>
       <section class="card">
-        <div class="cardhead"><h2>Labor minutes per correctly returned item</h2></div>
-        <div id="barChart" class="chart"></div>
+        <div class="cardhead"><h2>Value if adopted</h2></div>
+        <div id="business"></div>
       </section>
     </div>
 
     <section class="card">
       <div class="cardhead">
-        <h2>Store map &amp; routes</h2>
-        <div class="controls">
-          <select id="mapStrategy"></select>
-          <select id="mapWorker"></select>
-        </div>
+        <h2>Where team members walk</h2>
+        <div class="controls"><select id="mapStrategy"></select><select id="mapWorker" hidden></select></div>
       </div>
-      <p class="hint">Blue lines = walking for reshop. Grey lines = walking for other work. Click a path segment to block it (like a closed aisle) and rerun.</p>
+      <p class="hint">Blue = walking for reshop. Grey = walking for other work. Click a path to close that aisle and rerun.</p>
       <div id="map" class="map"></div>
       <div id="blocked" class="hint"></div>
     </section>
 
-    <section class="card">
-      <div class="cardhead">
-        <h2>Why each batch was collected or skipped</h2>
-        <select id="logStrategy"></select>
+    <details class="card more">
+      <summary><h2>Method and details</h2><span class="hint">Pickup decisions, stress test, data checks, sources</span></summary>
+      <div class="morebody">
+        <section>
+          <div class="cardhead"><h3>How we tested it</h3></div>
+          <ul class="notes">
+            <li><b>Fair test.</b> All three ways get the same reshop, staff, and tasks, so only the method changes.</li>
+            <li><b>Guardrails.</b> A method only counts if it has no more errors, no late tasks, no bigger pile at close, and no older items.</li>
+            <li><b>Fictional store.</b> Layout and staff are made up. Cart limits and timing come from what store workers report online. <a href="https://github.com/6nico/reshop-relay/blob/main/docs/RESEARCH.md" target="_blank" rel="noopener">Sources</a></li>
+          </ul>
+        </section>
+        <section>
+          <div class="cardhead">
+            <h3>Stress test: does it hold if things change?</h3>
+            <div class="controls">
+              <select id="sweepParam"></select>
+              <select id="sweepSeeds"><option value="3">3 runs</option><option value="5" selected>5 runs</option><option value="10">10 runs</option></select>
+              <button id="sweepRun">Run</button>
+            </div>
+          </div>
+          <div id="sweepChart" class="chart tall"></div>
+          <div class="legend" id="legend2"></div>
+          <div class="tablewrap"><table id="sweepTable" class="sweeptable"></table></div>
+        </section>
+        <section>
+          <div class="cardhead"><h3>Why each pickup happened</h3><select id="logStrategy"></select></div>
+          <div class="tablewrap short"><table id="decisions"></table></div>
+        </section>
+        <section>
+          <div class="cardhead"><h3>Data checks</h3></div>
+          <div id="checks"></div>
+        </section>
       </div>
-      <div class="tablewrap short"><table id="decisions"></table></div>
-    </section>
-
-    <section class="card">
-      <div class="cardhead">
-        <h2>Does the result hold? Sensitivity</h2>
-        <div class="controls">
-          <select id="sweepParam"></select>
-          <select id="sweepSeeds"><option value="3">3 seeds</option><option value="5" selected>5 seeds</option><option value="10">10 seeds</option></select>
-          <button id="sweepRun">Run sweep</button>
-        </div>
-      </div>
-      <p class="hint">Reruns all strategies at several values of one assumption, using the same random seeds for each strategy. Shaded band = lowest to highest result across seeds.</p>
-      <div id="sweepChart" class="chart tall"></div>
-      <div class="legend" id="legend2"></div>
-      <div class="tablewrap"><table id="sweepTable" class="sweeptable"></table></div>
-    </section>
-
-    <div class="two">
-      <section class="card">
-        <div class="cardhead"><h2>Business value</h2></div>
-        <div id="business"></div>
-        <p class="hint">Released hours are time freed for other work. They are not payroll savings or extra profit. Software, equipment, and training costs are not included.</p>
-      </section>
-      <section class="card">
-        <div class="cardhead"><h2>Integrity checks</h2></div>
-        <div id="checks"></div>
-      </section>
+    </details>
     </div>
 
-    <section class="card notes">
-      <div class="cardhead"><h2>What this is (and isn't)</h2></div>
-      <ul>
-        <li><b>Fictional store.</b> The layout, staff, and tasks are made up. No real retailer data is used.</li>
-        <li><b>Department level only.</b> The model knows which department an item belongs to, not its exact shelf spot.</li>
-        <li><b>Forum-informed.</b> Cart limits and collection timing are based on what store workers describe online. Volumes and handling times are assumptions to test. <a href="https://github.com/6nico/reshop-relay/blob/main/docs/RESEARCH.md" target="_blank" rel="noopener">See sources</a>.</li>
-        <li><b>A strategy only "wins" if it passes the guardrails:</b> no more errors, no late tasks, no bigger backlog at close, and no older items left waiting.</li>
-      </ul>
-    </section>
-    <footer>Built by Nico · Python engine running in your browser via Pyodide · <a href="https://github.com/6nico/reshop-relay" target="_blank" rel="noopener">source</a></footer>
+    <div id="view-track" class="view" hidden>
+      <section class="card hero">
+        <p class="eyebrow">Next step</p>
+        <h1>Test it in one store before changing anything</h1>
+        <p class="big">The model uses a fictional store. A short in-store test shows if the same results hold with real reshop, real staff, and a real layout.</p>
+        <div class="steps">
+          <div><span>1</span><b>Today's way</b><p>2 weeks of dedicated reshop trips. Track the numbers below.</p></div>
+          <div><span>2</span><b>Hybrid</b><p>2 weeks of hybrid, on the same days of the week. Track the same numbers.</p></div>
+          <div><span>3</span><b>Compare</b><p>Enter the real numbers in Advanced settings and compare the results.</p></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="cardhead"><h2>What to measure</h2></div>
+        <p class="lead">Start by hand with simple tools. Later, two scans per item can collect almost everything automatically, the same way backstocking and pulling work today.</p>
+        <div class="scanflow">
+          <div><span class="pill">Scan in</span><b>At Guest Services</b><p>Scan the item and the reshop bin it goes into.</p></div>
+          <div class="arrow">→</div>
+          <div><span class="pill">Scan out</span><b>At the shelf</b><p>Scan the item and the shelf label where it goes back.</p></div>
+        </div>
+        <div class="tablewrap"><table class="track">
+          <tr><th>Measure</th><th>By hand (start here)</th><th>Automated (scan in, scan out)</th></tr>
+          <tr><td>Reshop coming in</td><td>Count items at Guest Services each hour</td><td>Scan-ins per hour</td></tr>
+          <tr><td>Labor time</td><td>Start and stop on a short phone form for each trip</td><td>First and last scan of each trip</td></tr>
+          <tr><td>Wait before shelf</td><td>Write the drop-off time on the tote</td><td>Time between scan-in and scan-out</td></tr>
+          <tr><td>Left at close</td><td>Count what is left at Guest Services</td><td>Scanned in, never scanned out</td></tr>
+          <tr><td>Placement errors</td><td>Spot check about 20 items the next morning</td><td>Shelf label doesn't match the item's spot, flagged right away</td></tr>
+          <tr><td>Late tasks</td><td>Note when freight, breaks, or backup cashier slip</td><td>Completion times from the task app</td></tr>
+        </table></div>
+        <p class="hint" style="margin-top:14px">Some of this scan data may already exist on store handhelds. Results are shown by hour or by store, never by person.</p>
+      </section>
+
+      <div class="two">
+        <section class="card">
+          <div class="cardhead"><h2>What counts as a win</h2></div>
+          <ul class="notes">
+            <li>At least <b>20% less labor</b> per item returned</li>
+            <li><b>No more</b> items left at close</li>
+            <li><b>No more</b> placement errors</li>
+            <li><b>No late</b> freight, breaks, or backup cashier</li>
+          </ul>
+        </section>
+        <section class="card">
+          <div class="cardhead"><h2>Before starting</h2></div>
+          <ul class="notes">
+            <li>Get approval from store leadership</li>
+            <li>Only use company data with permission</li>
+            <li>Tell the team what is being tracked and why</li>
+            <li>Track the process, not individual people</li>
+          </ul>
+        </section>
+      </div>
+    </div>
+    <footer>Built by Nicolas Olmos · <a href="https://github.com/6nico/reshop-relay" target="_blank" rel="noopener">source code</a></footer>
   </main>
 </div>
 <script src="https://cdn.jsdelivr.net/pyodide/v0.27.7/full/pyodide.js"></script>
